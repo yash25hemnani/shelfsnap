@@ -21,6 +21,12 @@ app.use(
   express.static(path.join(process.cwd(), "public", "catalog"), { maxAge: "7d" }),
 );
 
+// App screenshots for the About page
+app.use(
+  "/site",
+  express.static(path.join(process.cwd(), "public", "site"), { maxAge: "7d" }),
+);
+
 app.use("/api/admin", adminRoutes);
 // Before booksRoutes: its token check runs for every path it sees
 app.use(catalogRoutes);
