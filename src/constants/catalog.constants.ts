@@ -11,13 +11,29 @@ export const CATALOG_PAGE_SIZE = 48;
 export const CATALOG_CACHE_SECONDS = 300;
 export const CATALOG_STALE_SECONDS = 3600;
 
-export const APP_URL = "https://shelf-scan-28d17.web.app";
-
 // The Android app's id and link scheme, for the Join button. The app opens
 // shelfsnap://lib/{handle} on the library's page.
 export const ANDROID_PACKAGE = "com.yashhemnani.shelfsnap";
 export const APP_SCHEME = "shelfsnap";
-export const SOURCE_URL = "https://github.com/yash25hemnani/shelf-snap";
+
+// The app's code on GitHub, set in the environment (SOURCE_URL is the APK
+// download). The page leaves the code links out when it's missing or isn't
+// an https link.
+const repoUrl = process.env.REPO_URL?.trim() ?? "";
+export const APP_REPO_URL = repoUrl.startsWith("https://") ? repoUrl : null;
+
+// The newest Android build; most phones need the arm64-v8a APK
+export const APK_URL =
+  "https://github.com/yash25hemnani/shelf-snap-app/releases/latest/download/app-arm64-v8a-release.apk";
+
+// Search matches word beginnings the app stores in each book's
+// searchTokens, so the limits match the app's searchTokenMin/Max
+export const SEARCH_TOKEN_MIN = 2;
+export const SEARCH_TOKEN_MAX = 15;
+// Same cap as the app's search; each search costs 2 reads + up to this many
+export const SEARCH_LIMIT = 50;
+// Longer queries are cut here before they're split into words
+export const SEARCH_QUERY_MAX = 80;
 
 // Credit in the page's bottom corner
 export const AUTHOR_NAME = "Yash Hemnani";

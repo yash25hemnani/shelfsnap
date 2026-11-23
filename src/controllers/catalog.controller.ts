@@ -6,8 +6,9 @@ import {
   CATALOG_STALE_SECONDS,
   HANDLE_PATTERN,
 } from "../constants/catalog.constants";
-import { getCatalog } from "../services/catalog.service";
+import { getCatalog, searchCatalog } from "../services/catalog.service";
 import {
+  renderBookItems,
   renderCatalog,
   renderError,
   renderNotFound,
@@ -15,7 +16,7 @@ import {
 import { logger } from "../utils/logger";
 
 // Book data is escaped, and the CSP only runs the page's own script
-function setPageHeaders(res: Response, nonce: string, cache: string) {
+export function setPageHeaders(res: Response, nonce: string, cache: string) {
   res.set({
     "Content-Type": "text/html; charset=utf-8",
     "Cache-Control": cache,
@@ -25,6 +26,8 @@ function setPageHeaders(res: Response, nonce: string, cache: string) {
       "style-src 'unsafe-inline' https://fonts.googleapis.com",
       "font-src https://fonts.gstatic.com",
       `script-src 'nonce-${nonce}'`,
+      // The search box calls /lib/:handle/search on this site
+      "connect-src 'self'",
       "base-uri 'none'",
       "form-action 'none'",
       "frame-ancestors 'none'",
@@ -72,5 +75,42 @@ export async function getCatalogPage(req: Request, res: Response) {
     logger.error({ err, handle }, "catalog failed");
     setPageHeaders(res, nonce, "no-store");
     res.status(500).send(renderError(nonce));
+  }
+}
+
+// Whole-library search for the catalog's search box:
+// GET /lib/:handle/search?q=<words>. Returns the matching books as grid
+// items, built and escaped by the same view as the page. The CDN caches each
+// query, and the page sends the words cleaned up so repeats share a cache entry.
+export async function getCatalogSearch(req: Request, res: Response) {
+  const handle = String(req.params.handle ?? "").toLowerCase();
+  const query = typeof req.query.q === "string" ? req.query.q : "";
+  res.set({ "X-Content-Type-Options": "nosniff", "X-Robots-Tag": "noindex" });
+
+  if (!HANDLE_PATTERN.test(handle)) {
+    res.set("Cache-Control", "public, max-age=0, s-maxage=60");
+    return res.status(404).json({ error: "not_found" });
+  }
+
+  try {
+    const found = await searchCatalog(handle, query);
+    if (!found) {
+      res.set("Cache-Control", "public, max-age=0, s-maxage=60");
+      return res.status(404).json({ error: "not_found" });
+    }
+
+    res.set(
+      "Cache-Control",
+      `public, max-age=0, s-maxage=${CATALOG_CACHE_SECONDS}, stale-while-revalidate=${CATALOG_STALE_SECONDS}`,
+    );
+    res.json({
+      html: renderBookItems(found.books),
+      count: found.books.length,
+      capped: found.capped,
+    });
+  } catch (err) {
+    logger.error({ err, handle }, "catalog search failed");
+    res.set("Cache-Control", "no-store");
+    res.status(500).json({ error: "search_failed" });
   }
 }

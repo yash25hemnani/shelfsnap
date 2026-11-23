@@ -1,12 +1,14 @@
 import {
   ANDROID_PACKAGE,
+  APK_URL,
   APP_SCHEME,
-  APP_URL,
   AUTHOR_GITHUB,
   AUTHOR_LINKEDIN,
   AUTHOR_NAME,
   BANNERS,
-  SOURCE_URL,
+  SEARCH_TOKEN_MAX,
+  SEARCH_TOKEN_MIN,
+  APP_REPO_URL,
 } from "../constants/catalog.constants";
 import type { Catalog, CatalogBook } from "../types/catalog.types";
 
@@ -28,6 +30,8 @@ const ICON_PATHS: Record<string, string> = {
   join: `<path d="M16 21v-2a4 4 0 0 0-4-4H6a4 4 0 0 0-4 4v2"/><circle cx="9" cy="7" r="4"/><path d="M19 8v6"/><path d="M22 11h-6"/>`,
   search: `<circle cx="11" cy="11" r="7"/><path d="m20 20-3.5-3.5"/>`,
   more: `<path d="m6 9 6 6 6-6"/>`,
+  download: `<path d="M12 3v12"/><path d="m7 10 5 5 5-5"/><path d="M5 21h14"/>`,
+  close: `<path d="M18 6 6 18"/><path d="m6 6 12 12"/>`,
 };
 
 function icon(name: string): string {
@@ -80,14 +84,77 @@ a:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outlin
   grid-template-columns: repeat(auto-fill, minmax(132px, 1fr));
 }
 .book { min-width: 0; }
+.book-open {
+  display: block; width: 100%; padding: 0; border: 0; background: none;
+  font: inherit; color: inherit; text-align: left; cursor: pointer;
+}
+.book-open:focus-visible { outline: 2px solid var(--primary); outline-offset: 4px; border-radius: 12px; }
+.book-open:hover .cover { border-color: var(--primary); }
+.book-open:hover .title { color: var(--primary-dark); text-decoration: underline; text-underline-offset: 2px; }
 .cover {
   aspect-ratio: 2 / 3; border-radius: 12px; overflow: hidden; background: var(--muted);
   border: 1px solid var(--border); display: flex; align-items: center; justify-content: center;
 }
 .cover img { width: 100%; height: 100%; object-fit: cover; display: block; }
 .cover span { padding: 12px; text-align: center; font-weight: 600; color: var(--primary-dark); font-size: 14px; }
-.book h2 { margin: 8px 0 0; font-size: 15px; line-height: 1.3; font-weight: 600; }
-.book p { margin: 2px 0 0; font-size: 13px; color: var(--text-2); }
+.book .title { margin-top: 8px; font-size: 15px; line-height: 1.3; font-weight: 600; }
+.book .meta { margin-top: 2px; font-size: 13px; color: var(--text-2); }
+@media (max-width: 599px) {
+  .grid { grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px 10px; }
+  .book .cover { border-radius: 10px; }
+  .book .cover span { padding: 6px; font-size: 12px; }
+  .book .title { margin-top: 6px; font-size: 13px; }
+  .book .meta { font-size: 12px; }
+}
+.panel {
+  padding: 0; border: 0; border-radius: 20px; color: var(--text); background: var(--bg);
+  width: min(680px, calc(100% - 32px)); max-width: none; max-height: min(86vh, 780px);
+  box-shadow: 0 24px 64px rgba(27,43,34,.28);
+}
+.panel[open] { display: flex; flex-direction: column; }
+.panel::backdrop { background: rgba(27,43,34,.55); }
+.panel-inner { overflow-y: auto; padding: 28px; overscroll-behavior: contain; }
+.panel-close {
+  position: absolute; top: 12px; right: 12px; width: 40px; height: 40px; border-radius: 50%;
+  display: flex; align-items: center; justify-content: center; cursor: pointer;
+  border: 1px solid var(--border); background: var(--bg); color: var(--text);
+}
+.panel-close:focus-visible { outline: 2px solid var(--primary); outline-offset: 2px; }
+.detail { display: grid; grid-template-columns: 160px minmax(0, 1fr); gap: 20px 24px; align-items: start; }
+.detail .cover { border-radius: 12px; }
+.detail .cover span { font-size: 15px; }
+.detail-head { padding-right: 40px; }
+.detail-head h2 { margin: 0; font-size: 24px; line-height: 1.2; letter-spacing: -0.01em; }
+.detail-head .subtitle { margin: 6px 0 0; font-size: 16px; color: var(--text-2); }
+.detail-head .authors { margin: 10px 0 0; font-weight: 600; }
+.detail-more { grid-column: 1 / -1; display: flex; flex-direction: column; gap: 20px; }
+.facts {
+  margin: 0; padding: 16px 18px; border: 1px solid var(--border); border-radius: 16px;
+  display: grid; grid-template-columns: max-content minmax(0, 1fr); gap: 8px 20px; font-size: 15px;
+}
+.facts dt { color: var(--text-2); }
+.facts dd { margin: 0; overflow-wrap: anywhere; }
+.chips { display: flex; flex-wrap: wrap; gap: 8px; margin: 0; padding: 0; list-style: none; }
+.chips li { padding: 4px 12px; border: 1px solid var(--border); border-radius: 999px; font-size: 13px; color: var(--text-2); }
+.blurb h3 { margin: 0 0 6px; font-size: 16px; }
+.blurb p { margin: 0 0 12px; color: var(--text-2); max-width: 64ch; }
+.blurb p:last-child { margin-bottom: 0; }
+@media (min-width: 600px) {
+  .detail .cover { grid-row: span 2; }
+  .detail-more { grid-column: 2; }
+}
+@media (max-width: 599px) {
+  .panel {
+    width: 100%; max-height: 90vh; margin: auto 0 0; border-radius: 20px 20px 0 0;
+  }
+  .panel[open] { animation: rise .22s ease-out; }
+  .panel-inner { padding: 24px 16px 32px; }
+  .detail { grid-template-columns: 104px minmax(0, 1fr); gap: 16px; }
+  .detail-head h2 { font-size: 20px; }
+  .detail-head .subtitle { font-size: 15px; }
+}
+@keyframes rise { from { transform: translateY(24px); opacity: 0; } }
+@media (prefers-reduced-motion: reduce) { .panel[open] { animation: none; } }
 .empty { padding: 32px 0; color: var(--text-2); }
 .shelf-empty {
   margin-top: 32px; padding: 40px 24px; text-align: center;
@@ -109,6 +176,8 @@ a:focus-visible, input:focus-visible { outline: 2px solid var(--primary); outlin
 .about p { margin: 0; flex: 1 1 320px; max-width: 60ch; color: var(--text-2); }
 .about strong { color: var(--text); }
 .about .links { display: flex; flex-wrap: wrap; gap: 10px; }
+.about .links { max-width: 460px; }
+.about .note { flex-basis: 100%; margin: 2px 0 0; font-size: 14px; }
 .credit { border-top: 1px solid var(--border); background: var(--bg); }
 .credit .wrap {
   display: flex; flex-wrap: wrap; gap: 8px 24px; align-items: center;
@@ -164,29 +233,85 @@ ${body}
 }
 
 function about(): string {
+  const source = APP_REPO_URL
+    ? `<a class="button ghost" href="${esc(APP_REPO_URL)}" target="_blank" rel="noopener">${icon("github")}Source on GitHub</a>`
+    : "";
   return `<aside class="about">
-  <p><strong>This catalog is kept in ShelfSnap</strong>, a free, open-source app for people who own physical books. Scan a shelf, share a library, lend a copy.</p>
+  <p><strong>This catalog is kept in ShelfSnap</strong>, a free, open-source app for people who own physical books. Scan a shelf, share a library, lend a copy. <a href="/">See what it does</a></p>
   <div class="links">
-    <a class="button" href="${APP_URL}">${icon("book")}Open ShelfSnap</a>
-    <a class="button ghost" href="${SOURCE_URL}">${icon("github")}Source on GitHub</a>
+    <a class="button" href="${APK_URL}">${icon("download")}Get the Android app</a>
+    ${source}
+    <p class="note">The Android app downloads as an APK file. Your phone asks once before installing apps from outside the Play Store.</p>
   </div>
 </aside>`;
+}
+
+function cover(book: CatalogBook, lazy: boolean): string {
+  return book.coverUrl
+    ? `<img src="${esc(book.coverUrl)}" alt=""${lazy ? ' loading="lazy"' : ""} referrerpolicy="no-referrer">`
+    : `<span>${esc(book.title)}</span>`;
+}
+
+// Lowercase and accent-free, so the on-page filter matches the way the
+// whole-library search does
+function searchable(text: string): string {
+  return text.toLowerCase().normalize("NFD").replace(/\p{M}/gu, "");
+}
+
+// What the panel shows when a book is tapped. It sits in a <template>
+// next to the book, so opening it costs no requests.
+function bookDetail(book: CatalogBook): string {
+  const facts: [string, string | null][] = [
+    ["Published", book.publishedDate],
+    ["Publisher", book.publisher],
+    ["Pages", book.pageCount ? String(book.pageCount) : null],
+    ["Language", book.language],
+    ["ISBN", book.isbn],
+  ];
+  const shown = facts.filter((f): f is [string, string] => f[1] !== null);
+  const factList = shown.length
+    ? `<dl class="facts">${shown.map(([k, v]) => `<dt>${k}</dt><dd>${esc(v)}</dd>`).join("")}</dl>`
+    : "";
+  const chips = book.categories.length
+    ? `<ul class="chips" aria-label="Categories">${book.categories.map((c) => `<li>${esc(c)}</li>`).join("")}</ul>`
+    : "";
+  const blurb = book.description
+    ? `<div class="blurb"><h3>About this book</h3>${book.description
+        .split(/\n+/)
+        .map((p) => `<p>${esc(p)}</p>`)
+        .join("")}</div>`
+    : "";
+
+  return `<div class="detail">
+  <div class="cover">${cover(book, false)}</div>
+  <div class="detail-head">
+    <h2 id="panel-title">${esc(book.title)}</h2>
+    ${book.subtitle ? `<p class="subtitle">${esc(book.subtitle)}</p>` : ""}
+    ${book.authors.length ? `<p class="authors">${esc(book.authors.join(", "))}</p>` : ""}
+  </div>
+  ${factList || chips || blurb ? `<div class="detail-more">${factList}${chips}${blurb}</div>` : ""}
+</div>`;
 }
 
 function bookItem(book: CatalogBook): string {
   const authors = book.authors.join(", ");
   const year = book.publishedDate?.slice(0, 4);
-  const cover = book.coverUrl
-    ? `<img src="${esc(book.coverUrl)}" alt="" loading="lazy" referrerpolicy="no-referrer">`
-    : `<span>${esc(book.title)}</span>`;
-  // Lowercased text the search box matches against
-  const search = `${book.title} ${book.subtitle ?? ""} ${authors}`.toLowerCase();
+  const search = searchable(`${book.title} ${book.subtitle ?? ""} ${authors}`);
 
   return `<li class="book" data-search="${esc(search)}">
-  <div class="cover">${cover}</div>
-  <h2 class="clamp">${esc(book.title)}</h2>
-  ${authors ? `<p class="clamp">${esc(authors)}${year ? ` · ${esc(year)}` : ""}</p>` : ""}
+  <button type="button" class="book-open" aria-haspopup="dialog">
+    <span class="cover">${cover(book, true)}</span>
+    <span class="title clamp">${esc(book.title)}</span>
+    ${authors ? `<span class="meta clamp">${esc(authors)}${year ? ` · ${esc(year)}` : ""}</span>` : ""}
+  </button>
+  <template>${bookDetail(book)}</template>
 </li>`;
+}
+
+// Grid items for the whole-library search; the page's script puts them in
+// place of the loaded books
+export function renderBookItems(books: CatalogBook[]): string {
+  return books.map(bookItem).join("");
 }
 
 export function renderCatalog(catalog: Catalog, nonce: string): string {
@@ -196,8 +321,9 @@ export function renderCatalog(catalog: Catalog, nonce: string): string {
     library.description ?? `Books in ${library.name}, shared with ShelfSnap.`;
 
   const list = books.length
-    ? `<ul class="grid" id="books">${books.map(bookItem).join("")}</ul>
-<p class="empty" id="no-match" hidden>No books on this page match your search.</p>`
+    ? `<ul class="grid" id="books">${renderBookItems(books)}</ul>
+<ul class="grid" id="results" hidden></ul>
+<p class="empty" id="no-match" role="status" hidden></p>`
     : `<div class="shelf-empty">
   ${icon("book")}
   <h2>No public books here yet</h2>
@@ -205,38 +331,134 @@ export function renderCatalog(catalog: Catalog, nonce: string): string {
 </div>`;
 
   const more = nextCursor
-    ? `<div class="more"><a class="button ghost" href="/lib/${esc(handle)}?after=${esc(nextCursor)}">${icon("more")}More books</a></div>`
+    ? `<div class="more" id="more"><a class="button ghost" href="/lib/${esc(handle)}?after=${esc(nextCursor)}">${icon("more")}More books</a></div>`
     : "";
 
-  // Join opens the library in the app, where people ask to join. The web
-  // app's address is the default; on Android it becomes an intent link that
-  // opens the installed app and falls back to the web app without it.
-  const webJoin = `${APP_URL}/lib/${handle}`;
-  const androidJoin = `intent://lib/${handle}#Intent;scheme=${APP_SCHEME};package=${ANDROID_PACKAGE};S.browser_fallback_url=${encodeURIComponent(webJoin)};end`;
+  // Join opens the library in the app, where people ask to join. The app is
+  // Android only, so the button shows only on Android: an intent link that
+  // opens the installed app, or downloads it when it isn't installed.
+  const androidJoin = `intent://lib/${handle}#Intent;scheme=${APP_SCHEME};package=${ANDROID_PACKAGE};S.browser_fallback_url=${encodeURIComponent(APK_URL)};end`;
   const joinScript = `<script nonce="${nonce}">
 if (/Android/i.test(navigator.userAgent)) {
-  document.getElementById("join").href = ${JSON.stringify(androidJoin)};
+  const join = document.getElementById("join");
+  join.href = ${JSON.stringify(androidJoin)};
+  join.hidden = false;
 }
 </script>`;
 
-  // Filters the books already on the page; no extra requests or reads
+  // The panel that opens when a book is tapped, filled from the book's
+  // <template>; Esc, the close button and a tap outside it close it
+  const panel = books.length
+    ? `<dialog class="panel" id="book-panel" aria-labelledby="panel-title">
+  <div class="panel-inner"></div>
+  <button type="button" class="panel-close" aria-label="Close">${icon("close")}</button>
+</dialog>`
+    : "";
+
+  // Typing filters the loaded books at once. A moment after typing stops,
+  // the page asks /lib/:handle/search, which searches every public book the
+  // way the app does, and shows those matches instead.
   const script = books.length
     ? `<script nonce="${nonce}">
 (() => {
+  const handle = ${JSON.stringify(handle)};
   const input = document.getElementById("search");
-  const items = [...document.querySelectorAll("#books .book")];
-  const none = document.getElementById("no-match");
-  document.getElementById("search-box").hidden = false;
-  input.addEventListener("input", () => {
-    const words = input.value.toLowerCase().split(/\\s+/).filter(Boolean);
+  const grid = document.getElementById("books");
+  const results = document.getElementById("results");
+  const more = document.getElementById("more");
+  const count = document.getElementById("count");
+  const status = document.getElementById("no-match");
+  const pageCount = count.textContent;
+  const items = [...grid.querySelectorAll(".book")];
+  let timer = 0;
+  let controller = null;
+
+  const clean = (s) => s.toLowerCase().normalize("NFD").replace(/\\p{M}/gu, "");
+  // Same word rules as the app's search tokens
+  const searchWords = (s) => clean(s).split(/[^\\p{L}\\p{N}]+/u)
+    .filter((w) => w.length >= ${SEARCH_TOKEN_MIN}).map((w) => w.slice(0, ${SEARCH_TOKEN_MAX}));
+
+  const say = (text) => { status.textContent = text; status.hidden = !text; };
+
+  function showPage() {
+    results.hidden = true;
+    results.replaceChildren();
+    grid.hidden = false;
+    if (more) more.hidden = false;
+  }
+
+  function filterPage(value) {
+    const words = clean(value).split(/\\s+/).filter(Boolean);
     let shown = 0;
     for (const item of items) {
       const match = words.every((w) => item.dataset.search.includes(w));
       item.hidden = !match;
       if (match) shown++;
     }
-    none.hidden = shown > 0;
+    return shown;
+  }
+
+  async function searchLibrary(query, value, shown) {
+    controller = new AbortController();
+    try {
+      const res = await fetch("/lib/" + handle + "/search?q=" + encodeURIComponent(query), {
+        signal: controller.signal,
+        headers: { Accept: "application/json" },
+      });
+      if (!res.ok) throw new Error("HTTP " + res.status);
+      const data = await res.json();
+      if (input.value !== value) return;
+      // Built and escaped on the server, same as the books above
+      results.innerHTML = data.html;
+      grid.hidden = true;
+      if (more) more.hidden = true;
+      results.hidden = false;
+      const n = data.count;
+      count.textContent = n + (data.capped ? " newest matches" : n === 1 ? " match" : " matches");
+      if (data.capped) say("Only the newest matches are shown. Add another word to narrow the search.");
+      else say(n ? "" : "No books in this library match your search.");
+    } catch (err) {
+      if (err.name === "AbortError") return;
+      count.textContent = shown + " on this page";
+      say("Couldn't search the whole library, so only the books on this page are shown.");
+    }
+  }
+
+  document.getElementById("search-box").hidden = false;
+  input.addEventListener("input", () => {
+    clearTimeout(timer);
+    if (controller) controller.abort();
+    showPage();
+    const value = input.value;
+    const shown = filterPage(value);
+    if (!value.trim()) {
+      count.textContent = pageCount;
+      say("");
+      return;
+    }
+    const words = searchWords(value);
+    if (!words.length) {
+      count.textContent = shown + " on this page";
+      say(shown ? "" : "No books on this page match your search.");
+      return;
+    }
+    count.textContent = "Searching all books…";
+    say("");
+    timer = setTimeout(() => searchLibrary(words.join(" "), value, shown), 350);
   });
+
+  const dialog = document.getElementById("book-panel");
+  const body = dialog.querySelector(".panel-inner");
+  document.querySelector("main").addEventListener("click", (e) => {
+    const button = e.target.closest(".book-open");
+    if (!button) return;
+    body.replaceChildren(button.parentElement.querySelector("template").content.cloneNode(true));
+    dialog.showModal();
+    body.scrollTop = 0;
+  });
+  dialog.querySelector(".panel-close").addEventListener("click", () => dialog.close());
+  // The panel fills the dialog, so a click on the dialog itself is the backdrop
+  dialog.addEventListener("click", (e) => { if (e.target === dialog) dialog.close(); });
 })();
 </script>`
     : "";
@@ -245,7 +467,7 @@ if (/Android/i.test(navigator.userAgent)) {
   <div class="wrap">
     <h1>${esc(library.name)}</h1>
     ${library.description ? `<p>${esc(library.description)}</p>` : ""}
-    <a class="button" id="join" href="${esc(webJoin)}">${icon("join")}Join in ShelfSnap</a>
+    <a class="button" id="join" href="${APK_URL}" hidden>${icon("join")}Join in ShelfSnap</a>
   </div>
 </header>
 <main class="wrap">
@@ -254,9 +476,9 @@ if (/Android/i.test(navigator.userAgent)) {
       ? `<div class="bar">
     <label class="search" id="search-box" hidden>
       ${icon("search")}
-      <input id="search" type="search" placeholder="Search these books" aria-label="Search these books" autocomplete="off">
+      <input id="search" type="search" placeholder="Search by title or author" aria-label="Search all books by title or author" autocomplete="off">
     </label>
-    <span class="count">${books.length} book${books.length === 1 ? "" : "s"}${nextCursor ? " on this page" : ""}</span>
+    <span class="count" id="count" aria-live="polite">${books.length} book${books.length === 1 ? "" : "s"}${nextCursor ? " on this page" : ""}</span>
   </div>`
       : ""
   }
@@ -264,6 +486,7 @@ if (/Android/i.test(navigator.userAgent)) {
   ${more}
   ${about()}
 </main>
+${panel}
 ${joinScript}
 ${script}`;
 
