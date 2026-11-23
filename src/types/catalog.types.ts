@@ -13,6 +13,14 @@ export interface CatalogBook {
   authors: string[];
   coverUrl: string | null;
   publishedDate: string | null;
+  // Shown in the panel that opens when a book is tapped
+  description: string | null;
+  categories: string[];
+  publisher: string | null;
+  pageCount: number | null;
+  // Language name, like "English", from the stored code
+  language: string | null;
+  isbn: string | null;
 }
 
 export interface Catalog {
@@ -21,4 +29,10 @@ export interface Catalog {
   books: CatalogBook[];
   // ID of the last book shown when there are more; null on the last page
   nextCursor: string | null;
+}
+
+export interface CatalogSearch {
+  books: CatalogBook[];
+  // True when the search hit SEARCH_LIMIT, so older matches may be missing
+  capped: boolean;
 }
