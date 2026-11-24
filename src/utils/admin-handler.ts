@@ -18,7 +18,10 @@ export function adminRoute(
       if (!res.headersSent) res.json(result ?? { ok: true });
     } catch (err) {
       if (err instanceof AdminError) {
-        res.status(err.status).json({ error: err.message });
+        res.status(err.status).json({
+          error: err.message,
+          ...(err.details.length && { details: err.details }),
+        });
       } else if (err instanceof IndexNeededError) {
         res.status(409).json({ error: err.message, createIndexUrl: err.createUrl });
       } else {

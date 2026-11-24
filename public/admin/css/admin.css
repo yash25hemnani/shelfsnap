@@ -1576,6 +1576,19 @@ dialog::backdrop {
   font-weight: 400;
 }
 
+/* Import and Export CSV above a library's books */
+.action-cards .action {
+  flex-wrap: wrap;
+}
+
+.action-cards .action-text {
+  flex: 1 1 220px;
+}
+
+.action-cards .row-actions {
+  flex-wrap: wrap;
+}
+
 .mini-stats {
   display: grid;
   grid-template-columns: repeat(3, minmax(0, 1fr));

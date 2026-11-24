@@ -1,12 +1,17 @@
 import {
   FieldValue,
   getFirestore,
+  Timestamp,
+  type CollectionReference,
   type DocumentData,
+  type DocumentReference,
   type DocumentSnapshot,
   type Query,
 } from "firebase-admin/firestore";
 import firebaseApp from "../config/firebase";
 import { logAdminAction } from "../services/admin-log.service";
+import { parseCsv, toCsv, unguardCell } from "../utils/csv";
+import { toIsbn13 } from "../utils/isbn";
 import {
   adminRoute,
   cursorParam,
@@ -70,6 +75,24 @@ interface BookEdit {
   categories: string[];
 }
 
+/** One row of an imported CSV, checked and ready to save. */
+interface ImportBook extends BookEdit {
+  description: string | null;
+  publisher: string | null;
+  publishedDate: string | null;
+  pageCount: number | null;
+  language: string | null;
+  acquisition: string | null;
+  visibility: "public" | "private";
+  copies: number;
+}
+
+/** The field the app matches a book on in a library, and its value. */
+interface BookMatch {
+  field: "readingKey" | "isbn" | "title";
+  value: string;
+}
+
 interface LoanRow {
   id: string;
   status: string;
@@ -125,6 +148,8 @@ interface ReviewRow {
 
 type LoanOutcome = "returned" | "cancelled" | "lost";
 
+type CsvColumn = (typeof CSV_COLUMNS)[number];
+
 const LIBRARY_ACCESS = ["public", "unlisted", "private"] as const;
 const LOAN_STATUSES = [
   "requested",
@@ -154,6 +179,51 @@ const OUTCOME_FROM: Record<LoanOutcome, string[]> = {
 };
 
 const REVIEW_PATH = /^users\/[^/]+\/ratings\/[^/]+$/;
+
+// Book CSV columns, in export order. Authors and genres hold several values
+// split by semicolons, since author names can have commas in them.
+const CSV_COLUMNS = [
+  "title",
+  "subtitle",
+  "authors",
+  "isbn",
+  "genres",
+  "publisher",
+  "publishedDate",
+  "pageCount",
+  "language",
+  "description",
+  "coverUrl",
+  "copies",
+  "visibility",
+  "acquisition",
+] as const;
+// Export only, so a download shows the whole book; import skips them
+const CSV_EXPORT_EXTRAS = ["lent", "addedAt", "id"];
+// Header names, lowercased with spaces and punctuation dropped, to columns
+const CSV_HEADERS: Record<string, CsvColumn> = {
+  ...Object.fromEntries(CSV_COLUMNS.map((c) => [c.toLowerCase(), c])),
+  author: "authors",
+  genre: "genres",
+  category: "genres",
+  categories: "genres",
+  isbn13: "isbn",
+  isbn10: "isbn",
+  published: "publishedDate",
+  pages: "pageCount",
+  cover: "coverUrl",
+  noofcopies: "copies",
+};
+
+// One Firestore batch (500 writes) holds every row plus the library's
+// counts, so an import lands whole or not at all
+const IMPORT_MAX_ROWS = 400;
+const IMPORT_MAX_CHARS = 2_000_000;
+const IMPORT_MAX_COPIES = 99;
+// Problem rows listed back to the page; past this they're only counted
+const IMPORT_MAX_ERRORS = 20;
+// Firestore "in" filters take up to 30 values
+const IN_LIMIT = 30;
 
 const db = getFirestore(firebaseApp);
 
@@ -456,6 +526,306 @@ async function deleteBook(adminUid: string, libraryId: string, bookId: string) {
   );
 }
 
+// ---------- Book CSV import and export ----------
+
+function splitList(value: string) {
+  return value.split(";").map((s) => s.trim()).filter(Boolean);
+}
+
+/** A whole number from [min] to [max], or null when the cell is empty. */
+function wholeNumber(value: string, min: number, max: number, label: string) {
+  if (!value) return null;
+  if (!/^\d+$/.test(value)) throw new AdminError(400, `${label} must be a whole number`);
+  const n = Number(value);
+  if (n < min || n > max) {
+    throw new AdminError(400, `${label} must be from ${min} to ${max}`);
+  }
+  return n;
+}
+
+/** ISBN-10s become ISBN-13, which is all the app stores. */
+function importIsbn(value: string) {
+  const isbn = value.replace(/[\s-]/g, "").toUpperCase();
+  if (!isbn) return null;
+  if (/^\d{13}$/.test(isbn)) return isbn;
+  if (/^\d{9}[\dX]$/.test(isbn)) return toIsbn13(isbn);
+  throw new AdminError(400, "ISBN must be 10 or 13 digits");
+}
+
+function importDate(value: string) {
+  if (!value) return null;
+  if (!/^\d{4}(-\d{2}(-\d{2})?)?$/.test(value)) {
+    throw new AdminError(400, "Published date must look like 2001, 2001-09 or 2001-09-14");
+  }
+  return value;
+}
+
+/** ISO 639 code, like "en", the same as the providers send. */
+function importLanguage(value: string) {
+  const code = value.toLowerCase();
+  if (!code) return null;
+  if (!/^[a-z]{2,3}$/.test(code)) throw new AdminError(400, "Language must be a code like en or hi");
+  return code;
+}
+
+function importVisibility(value: string) {
+  const visibility = value.toLowerCase() || "public";
+  if (visibility !== "public" && visibility !== "private") {
+    throw new AdminError(400, "Visibility must be public or private");
+  }
+  return visibility;
+}
+
+function parseImportRow(cell: (column: CsvColumn) => string): ImportBook {
+  const title = optionalText(cell("title"), 300, "Title");
+  if (!title) throw new AdminError(400, "Title is required");
+  return {
+    title,
+    subtitle: optionalText(cell("subtitle"), 300, "Subtitle"),
+    authors: cleanList(splitList(cell("authors")), 20, "Authors"),
+    isbn: importIsbn(cell("isbn")),
+    coverUrl: httpsUrl(cell("coverUrl"), "Cover link"),
+    categories: cleanList(splitList(cell("genres")), 10, "Genres"),
+    description: optionalText(cell("description"), 5000, "Description"),
+    publisher: optionalText(cell("publisher"), 200, "Publisher"),
+    publishedDate: importDate(cell("publishedDate")),
+    pageCount: wholeNumber(cell("pageCount"), 1, 100_000, "Page count"),
+    language: importLanguage(cell("language")),
+    acquisition: optionalText(cell("acquisition"), 200, "Acquisition"),
+    visibility: importVisibility(cell("visibility")),
+    copies: wholeNumber(cell("copies"), 1, IMPORT_MAX_COPIES, "Copies") ?? 1,
+  };
+}
+
+/**
+ * Every row of the file as a book. Columns are found by their header, in
+ * any order, and unknown ones are skipped. When any row is bad, nothing is
+ * imported and the problems come back one line per row.
+ */
+function readImportFile(csv: string): ImportBook[] {
+  const [header, ...rows] = parseCsv(csv);
+  if (!header) throw new AdminError(400, "The file is empty");
+
+  const index = new Map<CsvColumn, number>();
+  header.forEach((name, i) => {
+    const column = CSV_HEADERS[name.toLowerCase().replace(/[^a-z0-9]/g, "")];
+    if (column && !index.has(column)) index.set(column, i);
+  });
+  if (!index.has("title")) {
+    throw new AdminError(400, "The file needs a title column. Export a library to get the column layout.");
+  }
+  if (!rows.length) throw new AdminError(400, "The file has no books under its header row");
+  if (rows.length > IMPORT_MAX_ROWS) {
+    throw new AdminError(
+      400,
+      `At most ${IMPORT_MAX_ROWS} books per file. This one has ${rows.length}, so split it up.`,
+    );
+  }
+
+  const books: ImportBook[] = [];
+  const problems: string[] = [];
+  rows.forEach((row, i) => {
+    const cell = (column: CsvColumn) => {
+      const at = index.get(column);
+      return at === undefined ? "" : unguardCell((row[at] ?? "").trim());
+    };
+    try {
+      books.push(parseImportRow(cell));
+    } catch (err) {
+      if (!(err instanceof AdminError)) throw err;
+      // Row 1 is the header, as in a spreadsheet
+      problems.push(`Row ${i + 2}: ${err.message}`);
+    }
+  });
+
+  if (problems.length) {
+    const shown = problems.slice(0, IMPORT_MAX_ERRORS);
+    if (problems.length > shown.length) shown.push(`…and ${problems.length - shown.length} more`);
+    throw new AdminError(
+      400,
+      `${problems.length === 1 ? "1 row has a problem" : `${problems.length} rows have problems`}. Nothing was imported.`,
+      shown,
+    );
+  }
+  return books;
+}
+
+/** Same order as the app's findBookInLibrary: reading key, ISBN, title. */
+function matchOf(book: ImportBook): BookMatch | null {
+  const key = readingKey(book.title, book.authors);
+  if (key) return { field: "readingKey", value: key };
+  if (book.isbn) return { field: "isbn", value: book.isbn };
+  if (book.title !== UNKNOWN_TITLE) return { field: "title", value: book.title };
+  return null;
+}
+
+const matchId = (match: BookMatch) => `${match.field}:${match.value}`;
+
+/** The books already in the library for [matches], by matchId. */
+async function findExisting(books: CollectionReference, matches: BookMatch[]) {
+  const values = new Map<BookMatch["field"], Set<string>>();
+  for (const { field, value } of matches) {
+    values.set(field, (values.get(field) ?? new Set()).add(value));
+  }
+
+  const lookups: Promise<[string, DocumentReference][]>[] = [];
+  for (const [field, set] of values) {
+    const list = [...set];
+    for (let i = 0; i < list.length; i += IN_LIMIT) {
+      lookups.push(
+        books
+          .where(field, "in", list.slice(i, i + IN_LIMIT))
+          .select(field)
+          .get()
+          .then((snap) => snap.docs.map((doc): [string, DocumentReference] => [
+            matchId({ field, value: String(doc.get(field)) }),
+            doc.ref,
+          ])),
+      );
+    }
+  }
+
+  const found = new Map<string, DocumentReference>();
+  for (const [id, ref] of (await Promise.all(lookups)).flat()) {
+    if (!found.has(id)) found.set(id, ref);
+  }
+  return found;
+}
+
+/** The doc the app would save for a book typed in by hand. */
+function newBookDoc(book: ImportBook, addedAt: Timestamp): DocumentData {
+  const { copies, ...fields } = book;
+  return {
+    ...fields,
+    addedAt,
+    noOfCopies: copies,
+    googleBooksId: null,
+    workId: null,
+    source: "manual",
+    originalLanguage: null,
+    searchTokens: searchTokens(book),
+    readingKey: readingKey(book.title, book.authors),
+  };
+}
+
+/**
+ * Adds a CSV of books to a library the way the app's addBooks does: a book
+ * already there, or repeated in the file, gets more copies instead of a
+ * second entry. One batch, so it all lands or nothing does.
+ */
+async function importBooks(adminUid: string, libraryId: string, csv: unknown) {
+  if (typeof csv !== "string" || !csv.trim()) throw new AdminError(400, "Choose a CSV file to import");
+  if (csv.length > IMPORT_MAX_CHARS) {
+    throw new AdminError(400, `The file is too big. Split it into files of up to ${IMPORT_MAX_ROWS} books.`);
+  }
+  const books = readImportFile(csv);
+
+  const libraryRef = db.collection("libraries").doc(libraryId);
+  if (!(await libraryRef.get()).exists) throw new AdminError(404, "No library with that id");
+  const booksRef = libraryRef.collection("books");
+
+  const matches = books.map(matchOf);
+  const existing = await findExisting(
+    booksRef,
+    matches.filter((m): m is BookMatch => m !== null),
+  );
+
+  // New books in file order; repeats add copies to the first one
+  const created: DocumentData[] = [];
+  const createdById = new Map<string, DocumentData>();
+  const extraCopies = new Map<string, { ref: DocumentReference; copies: number }>();
+  // A millisecond apart, so the newest-first list keeps the file's order
+  const now = Date.now();
+
+  books.forEach((book, i) => {
+    const match = matches[i];
+    const id = match ? matchId(match) : null;
+    const earlier = id ? createdById.get(id) : undefined;
+    if (earlier) {
+      earlier.noOfCopies += book.copies;
+      return;
+    }
+    const ref = id ? existing.get(id) : undefined;
+    if (ref) {
+      const entry = extraCopies.get(ref.path) ?? { ref, copies: 0 };
+      entry.copies += book.copies;
+      extraCopies.set(ref.path, entry);
+      return;
+    }
+    const doc = newBookDoc(book, Timestamp.fromMillis(now - i));
+    created.push(doc);
+    if (id) createdById.set(id, doc);
+  });
+
+  const totalCopies = books.reduce((sum, b) => sum + b.copies, 0);
+  const batch = db.batch();
+  for (const doc of created) batch.set(booksRef.doc(), doc);
+  for (const { ref, copies } of extraCopies.values()) {
+    batch.update(ref, { noOfCopies: FieldValue.increment(copies) });
+  }
+  batch.update(libraryRef, {
+    bookCount: FieldValue.increment(totalCopies),
+    uniqueCount: FieldValue.increment(created.length),
+    updatedAt: FieldValue.serverTimestamp(),
+  });
+  await batch.commit();
+
+  const result = {
+    rows: books.length,
+    added: created.length,
+    // Books that were already there and got more copies
+    topped: extraCopies.size,
+    copies: totalCopies,
+  };
+  await logAdminAction(adminUid, "book.import", { type: "library", id: libraryId }, null, result);
+  return result;
+}
+
+function fileSlug(name: string) {
+  return stripMarks(name.toLowerCase())
+    .replace(/[^a-z0-9]+/g, "-")
+    .replace(/^-+|-+$/g, "")
+    .slice(0, 40) || "library";
+}
+
+/** Every book in the library as CSV, in the layout import reads. */
+async function exportBooks(libraryId: string) {
+  const libraryRef = db.collection("libraries").doc(libraryId);
+  const library = (await libraryRef.get()).data();
+  if (!library) throw new AdminError(404, "No library with that id");
+
+  const snap = await libraryRef.collection("books").orderBy("addedAt", "desc").get();
+  const rows = snap.docs.map((doc) => {
+    const d = doc.data();
+    return [
+      str(d.title) ?? UNKNOWN_TITLE,
+      str(d.subtitle),
+      strList(d.authors).join("; "),
+      str(d.isbn),
+      strList(d.categories).join("; "),
+      str(d.publisher),
+      str(d.publishedDate),
+      int(d.pageCount, 0) > 0 ? int(d.pageCount, 0) : null,
+      str(d.language),
+      str(d.description),
+      str(d.coverUrl),
+      int(d.noOfCopies, 1),
+      str(d.visibility) ?? "public",
+      str(d.acquisition),
+      int(d.lentCount, 0),
+      iso(d.addedAt),
+      doc.id,
+    ];
+  });
+
+  const date = new Date().toISOString().slice(0, 10);
+  return {
+    filename: `${fileSlug(str(library.name) ?? "")}-books-${date}.csv`,
+    count: rows.length,
+    csv: toCsv([...CSV_COLUMNS, ...CSV_EXPORT_EXTRAS], rows),
+  };
+}
+
 // ---------- Loans ----------
 
 function toLoanRow(id: string, data: DocumentData): LoanRow {
@@ -750,6 +1120,14 @@ export const patchBook = adminRoute("Failed to save the book", (req) =>
 
 export const removeBook = adminRoute("Failed to remove the book", (req) =>
   deleteBook(req.user!.uid, param(req, "id"), param(req, "bookId")),
+);
+
+export const postBooksImport = adminRoute("Failed to import the books", (req) =>
+  importBooks(req.user!.uid, param(req, "id"), req.body?.csv),
+);
+
+export const getBooksExport = adminRoute("Failed to export the books", (req) =>
+  exportBooks(param(req, "id")),
 );
 
 export const getLoans = adminRoute("Failed to load loans", (req) =>

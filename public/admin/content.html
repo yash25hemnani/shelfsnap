@@ -240,6 +240,13 @@
         </div>`;
     }
 
+    function miniStatsHtml(l) {
+      return `
+        <div><strong>${formatNumber(l.bookCount)}</strong><span>Copies</span></div>
+        <div><strong>${formatNumber(l.uniqueCount)}</strong><span>Editions</span></div>
+        <div><strong>${formatNumber(l.memberCount)}</strong><span>Members</span></div>`;
+    }
+
     function libraryHtml(l) {
       return `
         <div class="drawer-hero">
@@ -255,11 +262,7 @@
           <dt>Created</dt><dd>${escapeHtml(formatDate(l.createdAt))}</dd>
           <dt>Library id</dt><dd class="uid">${escapeHtml(l.id)}</dd>
         </dl>
-        <div class="mini-stats">
-          <div><strong>${formatNumber(l.bookCount)}</strong><span>Copies</span></div>
-          <div><strong>${formatNumber(l.uniqueCount)}</strong><span>Editions</span></div>
-          <div><strong>${formatNumber(l.memberCount)}</strong><span>Members</span></div>
-        </div>
+        <div class="mini-stats" data-stats>${miniStatsHtml(l)}</div>
         <section class="section" aria-label="Members">
           <h4 class="section-title">Members</h4>
           <ul class="list">${l.members.map((m) => `
@@ -273,7 +276,30 @@
           <div data-books>${loadingHtml("Loading books…")}</div>
           <div class="load-more" data-books-more hidden><button class="btn btn-outline btn-sm" type="button">Load 25 more</button></div>
         </section>
-        <section class="section" aria-label="Moderation">
+        <section class="section action-cards" aria-label="Manage">
+          <div class="actions">
+            <div class="action">
+              <div class="action-text">
+                <strong>Import books</strong>
+                <span>Add books by hand from a CSV file. Only the title is required. A book that's
+                  already here gets more copies instead of a second entry.</span>
+              </div>
+              <div class="row-actions">
+                <button class="btn btn-ghost btn-xs" type="button" data-sample>${icon("description")}Download sample</button>
+                <button class="btn btn-outline btn-xs" type="button" data-import>${icon("upload_file")}Import CSV</button>
+              </div>
+              <input type="file" accept=".csv,text/csv" data-import-file hidden>
+            </div>
+          </div>
+          <div class="actions">
+            <div class="action">
+              <div class="action-text">
+                <strong>Export books</strong>
+                <span>Download every book in this library, private ones too, with copies and loans.</span>
+              </div>
+              <button class="btn btn-outline btn-xs" type="button" data-export>${icon("download")}Export CSV</button>
+            </div>
+          </div>
           <div class="actions${l.adminLocked ? "" : " actions-danger"}" data-lock-slot>${lockActionHtml(l)}</div>
         </section>`;
     }
@@ -374,6 +400,103 @@
       });
     }
 
+    // Same cap as the server; a bigger file gets turned away before upload
+    const IMPORT_MAX_BYTES = 2_000_000;
+
+    // Every column the import reads, with two filled-in rows to copy from
+    const SAMPLE_CSV = [
+      "title,subtitle,authors,isbn,genres,publisher,publishedDate,pageCount,language,description,coverUrl,copies,visibility,acquisition",
+      'Pride and Prejudice,,Jane Austen,9780141439518,Fiction;Classics,Penguin Classics,2003-01-30,480,en,"A witty story of manners, money and marriage.",,2,public,Bought',
+      "The Hobbit,There and Back Again,J. R. R. Tolkien,9780547928227,Fantasy,Mariner Books,2012-09-18,300,en,,,1,private,Gift from Asha",
+    ].join("\r\n") + "\r\n";
+
+    function saveFile(name, text) {
+      const url = URL.createObjectURL(new Blob([text], { type: "text/csv;charset=utf-8" }));
+      const link = Object.assign(document.createElement("a"), { href: url, download: name });
+      document.body.append(link);
+      link.click();
+      link.remove();
+      setTimeout(() => URL.revokeObjectURL(url), 1000);
+    }
+
+    /** Lists the bad rows of a rejected import. Resolves true to pick another file. */
+    function importProblemsDialog(err) {
+      return confirmDialog({
+        title: "Couldn't import",
+        message: `<p>${escapeHtml(err.message)}</p>
+          <ul class="hint" style="margin:8px 0 0;padding-left:18px">
+            ${err.data.details.map((line) => `<li>${escapeHtml(line)}</li>`).join("")}
+          </ul>`,
+        confirmLabel: "Choose another file",
+      });
+    }
+
+    /**
+     * The Import and Export CSV buttons. After an import, the book list
+     * reloads through [reloadBooks] and the counts move to match.
+     */
+    function wireCsv(drawer, library, reloadBooks) {
+      const importBtn = drawer.body.querySelector("[data-import]");
+      const exportBtn = drawer.body.querySelector("[data-export]");
+      const sampleBtn = drawer.body.querySelector("[data-sample]");
+      const fileInput = drawer.body.querySelector("[data-import-file]");
+      const base = `/libraries/${encodeURIComponent(library.id)}/books`;
+
+      sampleBtn.addEventListener("click", () => saveFile("shelfsnap-books-sample.csv", SAMPLE_CSV));
+
+      exportBtn.addEventListener("click", () => runAction(exportBtn, async () => {
+        const file = await api(`${base}/export`);
+        saveFile(file.filename, file.csv);
+      }, "Books exported"));
+
+      importBtn.addEventListener("click", () => fileInput.click());
+
+      fileInput.addEventListener("change", async () => {
+        const file = fileInput.files[0];
+        // Cleared so picking the same file again still fires change
+        fileInput.value = "";
+        if (!file) return;
+        if (file.size > IMPORT_MAX_BYTES) {
+          toast("The file is too big. Split it into files of up to 400 books.", "error");
+          return;
+        }
+
+        const confirmed = await confirmDialog({
+          title: "Import books",
+          message: `<p>Add the books in <strong>${escapeHtml(file.name)}</strong> to
+            ${escapeHtml(library.name)}.</p><p>A book that's already in the library, or listed twice,
+            gets more copies instead of a second entry. Every row is checked first: if any has a
+            problem, nothing is imported.</p>`,
+          confirmLabel: "Import",
+        });
+        if (!confirmed) return;
+
+        importBtn.disabled = true;
+        try {
+          const result = await api(`${base}/import`, { method: "POST", body: { csv: await file.text() } });
+          const parts = [plural(result.added, "new book", "new books")];
+          if (result.topped) parts.push(`${plural(result.topped, "book", "books")} got more copies`);
+          toast(`Imported ${plural(result.rows, "row", "rows")}: ${parts.join(", ")}`);
+
+          library.bookCount += result.copies;
+          library.uniqueCount += result.added;
+          drawer.body.querySelector("[data-stats]").innerHTML = miniStatsHtml(library);
+          const libs = panels.libraries.list;
+          if (libs.items.length) {
+            libs.update(libs.items.map((l) => (l.id === library.id
+              ? { ...l, bookCount: library.bookCount, uniqueCount: library.uniqueCount }
+              : l)));
+          }
+          reloadBooks();
+        } catch (err) {
+          if (!err.data?.details) toast(err.message, "error");
+          else if (await importProblemsDialog(err)) fileInput.click();
+        } finally {
+          importBtn.disabled = false;
+        }
+      });
+    }
+
     function wireBooks(drawer, library) {
       const body = drawer.body.querySelector("[data-books]");
       const more = drawer.body.querySelector("[data-books-more]");
@@ -405,6 +528,7 @@
       }
 
       moreBtn.addEventListener("click", () => load(true));
+      wireCsv(drawer, library, () => load(false));
       body.addEventListener("click", async (event) => {
         const row = event.target.closest("[data-book]");
         if (!row) return;

@@ -18,11 +18,15 @@ export class IndexNeededError extends Error {
   }
 }
 
-/** An expected failure with the HTTP status and message to send back. */
+/**
+ * An expected failure with the HTTP status and message to send back, and
+ * optional [details] lines, like one per bad row of an import.
+ */
 export class AdminError extends Error {
   constructor(
     public readonly status: number,
     message: string,
+    public readonly details: string[] = [],
   ) {
     super(message);
     this.name = "AdminError";

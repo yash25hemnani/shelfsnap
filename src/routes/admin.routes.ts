@@ -18,6 +18,7 @@ import {
   removeUser,
 } from "../controllers/admin-users.controller";
 import {
+  getBooksExport,
   getFriendships,
   getLibraries,
   getLibraryBooks,
@@ -26,6 +27,7 @@ import {
   getReports,
   getReviews,
   patchBook,
+  postBooksImport,
   postLoanResolve,
   putLibraryLock,
   removeBook,
@@ -58,6 +60,8 @@ router.get("/libraries", getLibraries);
 router.get("/libraries/:id", getLibraryDetail);
 router.put("/libraries/:id/lock", putLibraryLock);
 router.get("/libraries/:id/books", getLibraryBooks);
+router.get("/libraries/:id/books/export", getBooksExport);
+router.post("/libraries/:id/books/import", postBooksImport);
 router.patch("/libraries/:id/books/:bookId", patchBook);
 router.delete("/libraries/:id/books/:bookId", removeBook);
 
