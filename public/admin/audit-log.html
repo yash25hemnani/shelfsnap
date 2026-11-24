@@ -66,6 +66,7 @@
       "user.delete": ["deleted the account of", "person_remove", "danger"],
       "book.edit": ["edited the book", "edit", "edit"],
       "book.delete": ["removed the book", "delete", "danger"],
+      "book.import": ["imported books from a CSV into library", "upload_file", "edit"],
       "loan.resolve": ["resolved the loan", "swap_horiz", "edit"],
       "friendship.delete": ["deleted the friendship", "link_off", "danger"],
       "library.lock": ["made private and locked the library", "lock", "danger"],
@@ -132,6 +133,9 @@
           <div class="feed-text">
             <p><strong>${escapeHtml(who(entry))}</strong> ${escapeHtml(verb)} ${targetHtml(entry)}</p>
             ${diffHtml(entry.before, entry.after)}
+            ${entry.action === "book.import" && entry.after
+              ? `<p class="hint">${escapeHtml(`${entry.after.rows} rows: ${entry.after.added} new books, ${entry.after.topped} already there got more copies`)}</p>`
+              : ""}
           </div>
           <time class="feed-time" datetime="${escapeHtml(entry.createdAt ?? "")}"
             title="${escapeHtml(formatDateTime(entry.createdAt))}">${escapeHtml(formatRelative(entry.createdAt))}</time>
